@@ -11,6 +11,8 @@
   "dependencies": {
     "@marko/run": "latest",
     "marko": "latest"
+  },
+  "devDependencies": {
+    "@marko/run-adapter-static": "^2.0.4"
   }
 }
-
