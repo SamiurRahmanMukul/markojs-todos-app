@@ -66,6 +66,9 @@ static function moveTodoToEnd(list, fromId) {
 <let/draggingId=null>
 <let/dragOverId=null>
 <let/hasLoaded=false>
+<let/confirmDeleteKind=null>
+<let/confirmDeleteId=null>
+<let/confirmDeleteText="">
 
 <script>
   // Load persisted todos on the client (run once).
@@ -126,7 +129,7 @@ static function moveTodoToEnd(list, fromId) {
           placeholder="What needs to get done?"
           autocomplete="off"
           value:=newTodoText
-          onInput(event) { newTodoText = event.target.value }
+          onInput(event) { newTodoText = event.target.value; }
         />
         <button class="btn btnPrimary" type="submit" disabled=!newTodoText.trim()>
           Add
@@ -145,15 +148,10 @@ static function moveTodoToEnd(list, fromId) {
           type="button"
           disabled=todos.every((t) => !t.completed)
           onClick() {
-            const nextTodos = todos.filter((t) => !t.completed);
-            todos = nextTodos;
-
-            if (editingId && !nextTodos.some((t) => t.id === editingId)) {
-              editingId = null;
-              editingText = "";
-            }
-
-            persistTodos(nextTodos);
+            if (todos.every((t) => !t.completed)) return;
+            confirmDeleteKind = "completed";
+            confirmDeleteId = null;
+            confirmDeleteText = "";
           }
         >
           Clear completed
@@ -186,14 +184,14 @@ static function moveTodoToEnd(list, fromId) {
                 (editingId === todo.id ? " isEditing" : "") +
                 (draggingId === todo.id ? " isDragging" : "") +
                 (dragOverId === todo.id ? " isDragOver" : ""))
-              draggable=(editingId !== todo.id)
+              draggable=(editingId !== todo.id ? "true" : "false")
               onDragstart(event) {
                 if (editingId === todo.id) return;
                 draggingId = todo.id;
                 dragOverId = todo.id;
                 try {
                   event.dataTransfer?.setData("text/plain", todo.id);
-                  event.dataTransfer.effectAllowed = "move";
+                  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
                 } catch {
                   // ignore
                 }
@@ -203,7 +201,7 @@ static function moveTodoToEnd(list, fromId) {
                 event.preventDefault();
                 dragOverId = todo.id;
                 try {
-                  event.dataTransfer.dropEffect = "move";
+                  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
                 } catch {
                   // ignore
                 }
@@ -341,15 +339,9 @@ static function moveTodoToEnd(list, fromId) {
                     type="button"
                     aria-label=("Delete \"" + todo.text + "\"")
                     onClick() {
-                      const nextTodos = todos.filter((t) => t.id !== todo.id);
-                      todos = nextTodos;
-
-                      if (editingId === todo.id) {
-                        editingId = null;
-                        editingText = "";
-                      }
-
-                      persistTodos(nextTodos);
+                      confirmDeleteKind = "single";
+                      confirmDeleteId = todo.id;
+                      confirmDeleteText = todo.text;
                     }
                   >
                     <svg viewBox="0 0 20 20" width="18" height="18" focusable="false" aria-hidden="true">
@@ -384,6 +376,87 @@ static function moveTodoToEnd(list, fromId) {
       <span class="muted">Tip: drag the handle to reorder. Changes are saved automatically.</span>
     </footer>
   </div>
+
+  <if=confirmDeleteKind>
+    <div
+      class="dialogOverlay"
+      onClick() {
+        confirmDeleteKind = null;
+        confirmDeleteId = null;
+        confirmDeleteText = "";
+      }
+    >
+      <div
+        class="dialogCard"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmDeleteTitle"
+        aria-describedby="confirmDeleteDesc"
+        onClick(event) { event.stopPropagation(); }
+      >
+        <h2 id="confirmDeleteTitle" class="dialogTitle">
+          ${confirmDeleteKind === "single" ? "Delete todo?" : "Clear completed todos?"}
+        </h2>
+        <p id="confirmDeleteDesc" class="dialogText">
+          <if=(confirmDeleteKind === "single")>
+            This will permanently remove "<span class="dialogTodo">${confirmDeleteText}</span>".
+          </if>
+          <else>
+            This will remove all completed todos.
+          </else>
+        </p>
+        <div class="dialogActions">
+          <button
+            class="btn btnGhost"
+            type="button"
+            onClick() {
+              confirmDeleteKind = null;
+              confirmDeleteId = null;
+              confirmDeleteText = "";
+            }
+          >
+            Cancel
+          </button>
+          <button
+            class="btn btnDanger"
+            type="button"
+            onClick() {
+              if (confirmDeleteKind === "single") {
+                const targetId = confirmDeleteId;
+                if (targetId) {
+                  const nextTodos = todos.filter((t) => t.id !== targetId);
+                  todos = nextTodos;
+
+                  if (editingId === targetId) {
+                    editingId = null;
+                    editingText = "";
+                  }
+
+                  persistTodos(nextTodos);
+                }
+              } else if (confirmDeleteKind === "completed") {
+                const nextTodos = todos.filter((t) => !t.completed);
+                todos = nextTodos;
+
+                if (editingId && !nextTodos.some((t) => t.id === editingId)) {
+                  editingId = null;
+                  editingText = "";
+                }
+
+                persistTodos(nextTodos);
+              }
+
+              confirmDeleteKind = null;
+              confirmDeleteId = null;
+              confirmDeleteText = "";
+            }
+          >
+            ${confirmDeleteKind === "single" ? "Delete" : "Clear"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </if>
 </main>
 
 <style>
@@ -477,6 +550,49 @@ static function moveTodoToEnd(list, fromId) {
     overflow: hidden;
   }
 
+  .dialogOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 50;
+  }
+
+  .dialogCard {
+    width: min(440px, 100%);
+    background: white;
+    border-radius: 18px;
+    padding: 20px;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: var(--shadow);
+  }
+
+  .dialogTitle {
+    margin: 0 0 8px;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+
+  .dialogText {
+    margin: 0 0 16px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .dialogTodo {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .dialogActions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
   .addRow {
     display: grid;
     grid-template-columns: 1fr auto;
@@ -567,6 +683,15 @@ static function moveTodoToEnd(list, fromId) {
 
   .btnPrimary:hover:not(:disabled) {
     background: var(--primaryHover);
+  }
+
+  .btn.btnDanger {
+    background: var(--danger);
+    color: white;
+  }
+
+  .btn.btnDanger:hover:not(:disabled) {
+    background: #dc2626;
   }
 
   .btnGhost {
