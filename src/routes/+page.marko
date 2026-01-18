@@ -1,0 +1,812 @@
+static const STORAGE_KEY = "mytodos.todos.v1";
+
+static function makeId() {
+  if (typeof crypto !== "undefined" && crypto?.randomUUID) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+static function normalizeTodos(value) {
+  if (!Array.isArray(value)) return [];
+
+  const normalized = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+
+    const text = typeof raw.text === "string" ? raw.text.trim() : "";
+    if (!text) continue;
+
+    normalized.push({
+      id: typeof raw.id === "string" && raw.id ? raw.id : makeId(),
+      text,
+      completed: Boolean(raw.completed),
+      createdAt: typeof raw.createdAt === "number" ? raw.createdAt : Date.now()
+    });
+  }
+
+  return normalized;
+}
+
+static function persistTodos(nextTodos) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextTodos));
+  } catch {
+    // ignore storage errors (private mode, quota, etc.)
+  }
+}
+
+static function moveTodo(list, fromId, toId) {
+  if (fromId === toId) return list;
+
+  const fromIndex = list.findIndex((t) => t.id === fromId);
+  const toIndex = list.findIndex((t) => t.id === toId);
+  if (fromIndex < 0 || toIndex < 0) return list;
+
+  const next = [...list];
+  const [moved] = next.splice(fromIndex, 1);
+  const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+  next.splice(insertIndex, 0, moved);
+  return next;
+}
+
+static function moveTodoToEnd(list, fromId) {
+  const fromIndex = list.findIndex((t) => t.id === fromId);
+  if (fromIndex < 0) return list;
+
+  const next = [...list];
+  const [moved] = next.splice(fromIndex, 1);
+  next.push(moved);
+  return next;
+}
+
+<let/todos=[]>
+<let/newTodoText="">
+<let/editingId=null>
+<let/editingText="">
+<let/draggingId=null>
+<let/dragOverId=null>
+<let/hasLoaded=false>
+
+<script>
+  // Load persisted todos on the client (run once).
+  if (hasLoaded) return;
+  hasLoaded = true;
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const loaded = normalizeTodos(JSON.parse(raw));
+    todos = loaded;
+    // keep storage clean if we had to normalize
+    persistTodos(loaded);
+  } catch {
+    // ignore parse/storage errors
+  }
+</script>
+
+<main class="appShell">
+  <div class="appContainer">
+    <header class="appHeader">
+      <div class="appTitleRow">
+        <h1 class="appTitle">My ToDo's</h1>
+        <span class="badge">Local</span>
+      </div>
+      <p class="appSubtitle">A clean, fast to-do list with drag & drop sorting and local persistence.</p>
+    </header>
+
+    <section class="card">
+      <form
+        class="addRow"
+        onSubmit(event) {
+          event.preventDefault();
+
+          const text = newTodoText.trim();
+          if (!text) return;
+
+          const nextTodos = [
+            ...todos,
+            {
+              id: makeId(),
+              text,
+              completed: false,
+              createdAt: Date.now()
+            }
+          ];
+
+          todos = nextTodos;
+          newTodoText = "";
+          persistTodos(nextTodos);
+        }
+      >
+        <label class="srOnly" for="newTodo">Add a todo</label>
+        <input
+          id="newTodo"
+          class="textInput"
+          type="text"
+          placeholder="What needs to get done?"
+          autocomplete="off"
+          value:=newTodoText
+          onInput(event) { newTodoText = event.target.value }
+        />
+        <button class="btn btnPrimary" type="submit" disabled=!newTodoText.trim()>
+          Add
+        </button>
+      </form>
+
+      <div class="toolbar">
+        <div class="stats">
+          <strong>${todos.filter((t) => !t.completed).length}</strong>
+          remaining
+          <span class="dot">•</span>
+          <span class="muted">${todos.length} total</span>
+        </div>
+        <button
+          class="btn btnGhost"
+          type="button"
+          disabled=todos.every((t) => !t.completed)
+          onClick() {
+            const nextTodos = todos.filter((t) => !t.completed);
+            todos = nextTodos;
+
+            if (editingId && !nextTodos.some((t) => t.id === editingId)) {
+              editingId = null;
+              editingText = "";
+            }
+
+            persistTodos(nextTodos);
+          }
+        >
+          Clear completed
+        </button>
+      </div>
+
+      <if=todos.length>
+        <ul
+          class="todoList"
+          onDragover(event) { if (draggingId) event.preventDefault(); }
+          onDrop(event) {
+            event.preventDefault();
+            const fromId = event.dataTransfer?.getData("text/plain") || draggingId;
+
+            draggingId = null;
+            dragOverId = null;
+
+            if (!fromId) return;
+
+            const nextTodos = moveTodoToEnd(todos, fromId);
+            if (nextTodos === todos) return;
+            todos = nextTodos;
+            persistTodos(nextTodos);
+          }
+        >
+          <for|todo| of=todos>
+            <li
+              class=("todoItem" +
+                (todo.completed ? " isCompleted" : "") +
+                (editingId === todo.id ? " isEditing" : "") +
+                (draggingId === todo.id ? " isDragging" : "") +
+                (dragOverId === todo.id ? " isDragOver" : ""))
+              draggable=(editingId !== todo.id)
+              onDragstart(event) {
+                if (editingId === todo.id) return;
+                draggingId = todo.id;
+                dragOverId = todo.id;
+                try {
+                  event.dataTransfer?.setData("text/plain", todo.id);
+                  event.dataTransfer.effectAllowed = "move";
+                } catch {
+                  // ignore
+                }
+              }
+              onDragover(event) {
+                if (!draggingId || draggingId === todo.id) return;
+                event.preventDefault();
+                dragOverId = todo.id;
+                try {
+                  event.dataTransfer.dropEffect = "move";
+                } catch {
+                  // ignore
+                }
+              }
+              onDrop(event) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const fromId = event.dataTransfer?.getData("text/plain") || draggingId;
+                draggingId = null;
+                dragOverId = null;
+
+                if (!fromId || fromId === todo.id) return;
+
+                const nextTodos = moveTodo(todos, fromId, todo.id);
+                if (nextTodos === todos) return;
+                todos = nextTodos;
+                persistTodos(nextTodos);
+              }
+              onDragend() {
+                draggingId = null;
+                dragOverId = null;
+              }
+            >
+              <span class="dragHandle" aria-hidden="true" title="Drag to reorder">
+                <svg viewBox="0 0 16 16" width="16" height="16" focusable="false" aria-hidden="true">
+                  <circle cx="5" cy="4" r="1.1" />
+                  <circle cx="11" cy="4" r="1.1" />
+                  <circle cx="5" cy="8" r="1.1" />
+                  <circle cx="11" cy="8" r="1.1" />
+                  <circle cx="5" cy="12" r="1.1" />
+                  <circle cx="11" cy="12" r="1.1" />
+                </svg>
+              </span>
+
+              <input
+                class="check"
+                type="checkbox"
+                checked=todo.completed
+                aria-label=("Mark \"" + todo.text + "\" as complete")
+                onChange(event) {
+                  const completed = event.target.checked;
+                  const nextTodos = todos.map((t) => (t.id === todo.id ? { ...t, completed } : t));
+                  todos = nextTodos;
+                  persistTodos(nextTodos);
+                }
+              />
+
+              <div class="content">
+                <if=(editingId === todo.id)>
+                  <div class="editRow">
+                    <label class="srOnly" for=("edit-" + todo.id)>Edit todo</label>
+                    <input
+                      id=("edit-" + todo.id)
+                      class="textInput textInputSmall"
+                      type="text"
+                      value:=editingText
+                      onInput(event) { editingText = event.target.value }
+                      onKeydown(event) {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          const text = editingText.trim();
+                          if (!text) return;
+
+                          const nextTodos = todos.map((t) => (t.id === todo.id ? { ...t, text } : t));
+                          todos = nextTodos;
+                          editingId = null;
+                          editingText = "";
+                          persistTodos(nextTodos);
+                        }
+
+                        if (event.key === "Escape") {
+                          editingId = null;
+                          editingText = "";
+                        }
+                      }
+                    />
+                    <button
+                      class="btn btnPrimary btnSmall"
+                      type="button"
+                      disabled=!editingText.trim()
+                      onClick() {
+                        const text = editingText.trim();
+                        if (!text) return;
+
+                        const nextTodos = todos.map((t) => (t.id === todo.id ? { ...t, text } : t));
+                        todos = nextTodos;
+                        editingId = null;
+                        editingText = "";
+                        persistTodos(nextTodos);
+                      }
+                    >
+                      Save
+                    </button>
+                    <button
+                      class="btn btnGhost btnSmall"
+                      type="button"
+                      onClick() {
+                        editingId = null;
+                        editingText = "";
+                      }
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </if>
+                <else>
+                  <div class="textRow">
+                    <span class="todoText" title=todo.text>${todo.text}</span>
+                    <span class="meta muted">
+                      ${new Date(todo.createdAt).toLocaleDateString(undefined, { month: "short", day: "2-digit" })}
+                    </span>
+                  </div>
+                </else>
+              </div>
+
+              <div class="actions">
+                <if=(editingId !== todo.id)>
+                  <button
+                    class="btnIcon"
+                    type="button"
+                    aria-label=("Edit \"" + todo.text + "\"")
+                    onClick() {
+                      editingId = todo.id;
+                      editingText = todo.text;
+                    }
+                  >
+                    <svg viewBox="0 0 20 20" width="18" height="18" focusable="false" aria-hidden="true">
+                      <path d="M14.69 2.86a2 2 0 0 1 2.83 2.83l-9.5 9.5-3.78.95.95-3.78 9.5-9.5Z" />
+                      <path d="M12.56 4.99 15 7.43" />
+                    </svg>
+                  </button>
+                  <button
+                    class="btnIcon btnDanger"
+                    type="button"
+                    aria-label=("Delete \"" + todo.text + "\"")
+                    onClick() {
+                      const nextTodos = todos.filter((t) => t.id !== todo.id);
+                      todos = nextTodos;
+
+                      if (editingId === todo.id) {
+                        editingId = null;
+                        editingText = "";
+                      }
+
+                      persistTodos(nextTodos);
+                    }
+                  >
+                    <svg viewBox="0 0 20 20" width="18" height="18" focusable="false" aria-hidden="true">
+                      <path d="M6 6.5v10.2c0 .7.6 1.3 1.3 1.3h5.4c.7 0 1.3-.6 1.3-1.3V6.5" />
+                      <path d="M8 6.5V5.2c0-.7.6-1.2 1.2-1.2h1.6c.7 0 1.2.5 1.2 1.2v1.3" />
+                      <path d="M4.5 6.5h11" />
+                    </svg>
+                  </button>
+                </if>
+              </div>
+            </li>
+          </for>
+        </ul>
+      </if>
+      <else>
+        <div class="emptyState">
+          <div class="emptyIcon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" focusable="false" aria-hidden="true">
+              <path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
+              <path d="M8 7h8M8 11h8M8 15h5" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="emptyTitle">No todos yet</h2>
+            <p class="emptyText">Add your first task above — you can drag items to reorder them anytime.</p>
+          </div>
+        </div>
+      </else>
+    </section>
+
+    <footer class="footer">
+      <span class="muted">Tip: drag the handle to reorder. Changes are saved automatically.</span>
+    </footer>
+  </div>
+</main>
+
+<style>
+  :root {
+    --bg0: #0b1220;
+    --bg1: #0f1b33;
+    --card: rgba(255, 255, 255, 0.92);
+    --cardBorder: rgba(15, 23, 42, 0.10);
+    --text: #0f172a;
+    --muted: rgba(15, 23, 42, 0.62);
+    --shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+    --shadowSoft: 0 10px 24px rgba(0, 0, 0, 0.12);
+    --primary: #2563eb;
+    --primaryHover: #1d4ed8;
+    --danger: #ef4444;
+    --ring: 0 0 0 4px rgba(37, 99, 235, 0.18);
+    --radius: 16px;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+      "Segoe UI Emoji";
+    background: radial-gradient(1200px 700px at 20% 10%, #1b2b55 0%, transparent 60%),
+      radial-gradient(900px 500px at 80% 0%, #1b4b9c 0%, transparent 55%),
+      linear-gradient(160deg, var(--bg0) 0%, var(--bg1) 80%);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  .appShell {
+    min-height: 100%;
+    padding: 48px 20px 56px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+
+  .appContainer {
+    width: min(860px, 100%);
+  }
+
+  .appHeader {
+    color: rgba(255, 255, 255, 0.92);
+    margin-bottom: 18px;
+  }
+
+  .appTitleRow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .appTitle {
+    font-size: 34px;
+    line-height: 1.1;
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  .badge {
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .appSubtitle {
+    margin: 10px 0 0;
+    max-width: 64ch;
+    color: rgba(255, 255, 255, 0.72);
+    line-height: 1.55;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--cardBorder);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .addRow {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    padding: 16px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    background: rgba(255, 255, 255, 0.55);
+  }
+
+  .toolbar {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .stats {
+    font-size: 14px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dot {
+    opacity: 0.6;
+  }
+
+  .muted {
+    color: var(--muted);
+  }
+
+  .textInput {
+    width: 100%;
+    height: 42px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    background: rgba(255, 255, 255, 0.92);
+    font-size: 15px;
+    color: var(--text);
+    outline: none;
+    box-shadow: var(--shadowSoft);
+  }
+
+  .textInput::placeholder {
+    color: rgba(15, 23, 42, 0.45);
+  }
+
+  .textInput:focus {
+    border-color: rgba(37, 99, 235, 0.45);
+    box-shadow: var(--shadowSoft), var(--ring);
+  }
+
+  .textInputSmall {
+    height: 38px;
+    box-shadow: none;
+    background: white;
+  }
+
+  .btn {
+    height: 42px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+    user-select: none;
+  }
+
+  .btn:active {
+    transform: translateY(1px);
+  }
+
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btnPrimary {
+    background: var(--primary);
+    color: white;
+  }
+
+  .btnPrimary:hover:not(:disabled) {
+    background: var(--primaryHover);
+  }
+
+  .btnGhost {
+    background: transparent;
+    color: var(--text);
+    border-color: rgba(15, 23, 42, 0.12);
+  }
+
+  .btnGhost:hover:not(:disabled) {
+    background: rgba(15, 23, 42, 0.06);
+  }
+
+  .btnSmall {
+    height: 38px;
+    padding: 0 12px;
+    border-radius: 10px;
+  }
+
+  .todoList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .todoItem {
+    display: grid;
+    grid-template-columns: 22px 22px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 16px;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .todoItem:first-child {
+    border-top: 0;
+  }
+
+  .todoItem.isDragOver {
+    outline: 2px solid rgba(37, 99, 235, 0.35);
+    outline-offset: -2px;
+    background: rgba(37, 99, 235, 0.05);
+  }
+
+  .todoItem.isDragging {
+    opacity: 0.55;
+  }
+
+  .todoItem.isCompleted .todoText {
+    text-decoration: line-through;
+    color: rgba(15, 23, 42, 0.55);
+  }
+
+  .dragHandle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 8px;
+    color: rgba(15, 23, 42, 0.4);
+    cursor: grab;
+  }
+
+  .dragHandle svg {
+    fill: currentColor;
+  }
+
+  .todoItem:active .dragHandle {
+    cursor: grabbing;
+  }
+
+  .check {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+
+  .content {
+    min-width: 0;
+  }
+
+  .textRow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .todoText {
+    font-size: 15px;
+    line-height: 1.35;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .editRow {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btnIcon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    background: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+
+  .btnIcon svg {
+    fill: none;
+    stroke: rgba(15, 23, 42, 0.78);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .btnIcon:hover {
+    background: rgba(15, 23, 42, 0.06);
+  }
+
+  .btnIcon:active {
+    transform: translateY(1px);
+  }
+
+  .btnDanger svg {
+    stroke: rgba(239, 68, 68, 0.92);
+  }
+
+  .emptyState {
+    padding: 18px 16px 22px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 12px;
+    align-items: start;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .emptyIcon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    background: rgba(37, 99, 235, 0.08);
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(37, 99, 235, 0.85);
+  }
+
+  .emptyIcon svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .emptyTitle {
+    margin: 0;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+
+  .emptyText {
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  .footer {
+    margin-top: 14px;
+    padding: 0 4px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 13px;
+  }
+
+  .srOnly {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (max-width: 560px) {
+    .addRow {
+      grid-template-columns: 1fr;
+    }
+
+    .btnPrimary {
+      width: 100%;
+    }
+
+    .todoItem {
+      grid-template-columns: 22px 22px 1fr;
+      gap: 10px 12px;
+    }
+
+    .actions {
+      grid-column: 1 / -1;
+      justify-content: flex-end;
+      padding-left: 34px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn,
+    .btnIcon {
+      transition: none;
+    }
+  }
+</style>
+

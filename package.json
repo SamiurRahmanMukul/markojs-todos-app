@@ -1,0 +1,16 @@
+{
+  "name": "markojs-todos-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "marko-run dev",
+    "build": "marko-run build",
+    "start": "marko-run start",
+    "preview": "marko-run preview"
+  },
+  "dependencies": {
+    "@marko/run": "latest",
+    "marko": "latest"
+  }
+}
+
