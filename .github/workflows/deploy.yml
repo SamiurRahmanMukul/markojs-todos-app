@@ -31,7 +31,14 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: NODE_ENV=production npm run build
+        
+      - name: Verify build output
+        run: |
+          ls -la dist/public/
+          echo "---"
+          echo "Checking index.html exists:"
+          test -f dist/public/index.html && echo "✓ index.html found" || echo "✗ index.html NOT found"
 
       - name: Add .nojekyll file
         run: touch dist/public/.nojekyll
